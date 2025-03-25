@@ -1,247 +1,216 @@
-const { baseDataUrl } = require('./constants');
+const fs = require('fs');
+const path = require('path');
 const buildMeta = require('./src/buildMeta');
 const buildReplay = require('./src/buildReplay');
-const downloadMetadata = require('./src/downloadMetadata');
-const getDownloadLink = require('./src/getDownloadLink');
-const handleDownload = require('./src/handleDownload');
-const UnsuccessfulRequestException = require('./src/UnsuccessfulRequestException');
 
-const defaultDownloadConfig = {
-  updateCallback: () => { },
-  eventCount: 1000,
-  dataCount: 1000,
-  checkpointCount: 1000,
-  maxConcurrentDownloads: Infinity,
-  matchId: '',
+const replayChunksDir = path.join(__dirname, 'replay_chunks');
+const metadataFilePath = path.join(replayChunksDir, 'metadata.json');
+
+const defaultConfig = {
+  updateCallback: (progress) => console.log('Progress:', progress),
+  dataCount: Infinity, 
+  eventCount: Infinity, 
+  checkpointCount: Infinity, 
 };
 
-const defaultMetadataConfig = {
-  matchId: '',
-  chunkDownloadLinks: true,
-};
-
-/**
- * @param {{ Id: string }[] | undefined} arr
- */
-const getChunkIds = (arr) => arr?.map((x) => `${x.Id}.bin`) || [];
-
-const downloadMetadataWrapper = async (inConfig) => {
-  const config = {
-    ...defaultMetadataConfig,
-    ...inConfig,
-  };
-
-  const metadata = await downloadMetadata(config.matchId);
-
-  if (!metadata) {
-    return null;
+const loadMetadata = () => {
+  console.log(`Loading metadata from: ${metadataFilePath}`);
+  if (!fs.existsSync(metadataFilePath)) {
+    throw new Error(`Metadata file not found at ${metadataFilePath}`);
   }
-
-  if (config.chunkDownloadLinks) {
-    const files = await getDownloadLink(`${baseDataUrl}${config.matchId}/`, [
-      'header.bin',
-      ...getChunkIds(metadata.Events),
-      ...getChunkIds(metadata.Checkpoints),
-      ...getChunkIds(metadata.DataChunks),
-    ]);
-
-    const eacher = (theChunk) => {
-      const chunk = theChunk;
-      const index = `${chunk.Id}.bin`;
-
-      if (!files[index]) {
-        console.error(index, 'not found in files list');
-
-        return;
-      }
-
-      chunk.DownloadLink = files[index].readLink;
-      chunk.FileSize = files[index].size;
-    };
-
-    if (metadata.Events) {
-      metadata.Events.forEach(eacher);
-    }
-
-    if (metadata.Checkpoints) {
-      metadata.Checkpoints.forEach(eacher);
-    }
-
-    if (metadata.DataChunks) {
-      metadata.DataChunks.forEach(eacher);
-    }
-
-    metadata.Id = 'header';
-    eacher(metadata);
-    delete metadata.Id;
-  }
-
+  const metadata = JSON.parse(fs.readFileSync(metadataFilePath, 'utf-8'));
   return metadata;
 };
 
-const downloadReplay = async (inConfig) => {
-  const config = {
-    ...defaultDownloadConfig,
-    ...inConfig,
-  };
-
-  const meta = await downloadMetadataWrapper(config);
-
-  if (!meta) {
-    throw new UnsuccessfulRequestException(500);
+const loadChunkFile = (chunkName) => {
+  const filePath = path.join(replayChunksDir, chunkName);
+  console.log(`Loading chunk file: ${filePath}`);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Chunk file not found: ${filePath}`);
   }
+  const chunkData = fs.readFileSync(filePath);
+  console.log(`Chunk file loaded successfully: ${chunkName}`);
+  return chunkData;
+};
 
+const processReplay = async (config = defaultConfig) => {
+  console.log('Starting replay processing with config:', config);
+
+  const metadata = loadMetadata();
+  if (!metadata || !metadata.meta) {
+    throw new Error('Metadata is invalid or missing the "meta" field.');
+  }
+  const { meta } = metadata;
   const { updateCallback } = config;
 
   const downloadChunks = [];
-  let { DataChunks, Checkpoints, Events } = meta;
 
-  delete meta.DataChunks;
-  delete meta.Checkpoints;
-  delete meta.Events;
-
-  if (!DataChunks) {
-    DataChunks = [];
-  }
-
-  if (!Checkpoints) {
-    Checkpoints = [];
-  }
-
-  if (!Events) {
-    Events = [];
-  }
-
-  updateCallback({
-    header: {
-      current: 0,
-      max: 1,
-    },
-    dataChunks: {
-      current: 0,
-      max: Math.min(DataChunks.length, config.dataCount),
-    },
-    eventChunks: {
-      current: 0,
-      max: Math.min(Events.length, config.eventCount),
-    },
-    checkpointChunks: {
-      current: 0,
-      max: Math.min(Checkpoints.length, config.checkpointCount),
-    },
-  });
-
+  // Build meta buffer
   const metaBuffer = buildMeta(meta);
+  console.log('Meta buffer created successfully.');
 
+  // Load the header file
+  console.log('Loading header file: replay.header');
   downloadChunks.push({
-    DownloadLink: meta.DownloadLink,
+    data: loadChunkFile('replay.header'),
     type: 'chunk',
-    chunkType: 0,
-    size: 8,
+    chunkType: 0, // header type
+    size: fs.statSync(path.join(replayChunksDir, 'replay.header')).size,
     encoding: null,
   });
 
-  DataChunks.forEach((data, index) => {
-    if (index >= config.dataCount) {
-      return;
-    }
+  // Process stream files
+  const allFiles = fs.readdirSync(replayChunksDir);
+  const streamFiles = allFiles
+    .filter(file => file.startsWith('stream.'))
+    .sort((a, b) => {
+      const aNum = parseInt(a.split('.')[1], 10);
+      const bNum = parseInt(b.split('.')[1], 10);
+      return aNum - bNum;
+    });
 
+  const eventsArray = (metadata.events && Array.isArray(metadata.events.events))
+    ? metadata.events.events
+    : [];
+
+  // Set progress max
+  updateCallback({
+    header: { current: 0, max: 1 },
+    dataChunks: { current: 0, max: Math.min(streamFiles.length, config.dataCount) },
+    eventChunks: { current: 0, max: Math.min(eventsArray.length, config.eventCount) },
+    checkpointChunks: { current: 0, max: Math.min(eventsArray.length, config.checkpointCount) },
+  });
+
+  // Load streams
+  streamFiles.forEach((file, index) => {
+    if (index >= config.dataCount) return;
+    console.log(`Loading data chunk: ${file}`);
+    const filePath = path.join(replayChunksDir, file);
+    const fileSize = fs.statSync(filePath).size;
     downloadChunks.push({
-      ...data,
+      data: loadChunkFile(file),
       type: 'chunk',
-      chunkType: 1,
-      size: 24,
+      chunkType: 1, // data chunk
+      size: fileSize,
       encoding: null,
     });
   });
 
-  Events.forEach((data, index) => {
-    if (index >= config.eventCount) {
-      return;
+  // Process events from the metadata as event chunks.
+  eventsArray.forEach((event, index) => {
+    if (index >= config.eventCount) return;
+    console.log(`Processing event chunk for event: ${event.id}`);
+
+    // Convert event.data to a Buffer
+    let eventBuffer;
+    if (event.data && event.data.type === 'Buffer' && Array.isArray(event.data.data)) {
+      eventBuffer = Buffer.from(event.data.data);
     }
 
+    const computedSize =
+      35 +
+      (event.id ? event.id.length : 0) +
+      (event.group ? event.group.length : 0) +
+      (event.meta ? event.meta.toString().length : 0) +
+      eventBuffer.length;
+
     downloadChunks.push({
-      ...data,
+      data: eventBuffer,
       type: 'chunk',
-      chunkType: 3,
-      size: 35 + data.Id.length + data.Group.length + (data.Metadata ? data.Metadata.length : 0),
+      chunkType: 3, // event chunk type
+      size: computedSize,
       encoding: null,
+      Id: event.id,         
+      Group: event.group,   
+      Metadata: event.meta,
+      Time1: event.time1 || 0, 
+      Time2: event.time2 || 0,
     });
   });
 
-  Checkpoints.forEach((data, index) => {
-    if (index >= config.checkpointCount) {
-      return;
+  // Process the same events as checkpoint chunks
+  eventsArray.forEach((event, index) => {
+    if (index >= config.checkpointCount) return;
+    console.log(`Processing checkpoint chunk for event: ${event.id}`);
+
+    // Convert event.data to a Buffer
+    let checkpointBuffer;
+    if (event.data && event.data.type === 'Buffer' && Array.isArray(event.data.data)) {
+      checkpointBuffer = Buffer.from(event.data.data);
     }
 
+    const computedSize =
+      35 +
+      (event.id ? event.id.length : 0) +
+      (event.group ? event.group.length : 0) +
+      (event.meta ? event.meta.toString().length : 0) +
+      checkpointBuffer.length;
+
     downloadChunks.push({
-      ...data,
-      type: 'chunk',
-      chunkType: 2,
-      size: 35 + data.Id.length + data.Group.length + (data.Metadata ? data.Metadata.length : 0),
+      data: checkpointBuffer,
+      type: 'chunk', 
+      chunkType: 2, 
+      size: computedSize,
       encoding: null,
+      Id: event.id,         
+      Group: event.group,   
+      Metadata: event.meta, 
+      Time1: event.time1 || 0, 
+      Time2: event.time2 || 0, 
     });
   });
 
+  // Update progress for all chunks
+  let headerDone = 0;
   let dataDone = 0;
   let eventDone = 0;
   let checkpointDone = 0;
-  let headerDone = 0;
 
-  const result = await handleDownload(downloadChunks, config.maxConcurrentDownloads, (type) => {
-    if (!updateCallback) {
-      return;
-    }
-
-    switch (type) {
+  downloadChunks.forEach((chunk) => {
+    switch (chunk.chunkType) {
       case 0:
         headerDone += 1;
-
         break;
       case 1:
         dataDone += 1;
-
-        break;
-      case 2:
-        checkpointDone += 1;
-
         break;
       case 3:
         eventDone += 1;
-
+        break;
+      case 2:
+        checkpointDone += 1;
         break;
       default:
         break;
     }
 
     updateCallback({
-      header: {
-        current: headerDone,
-        max: 1,
-      },
-      dataChunks: {
-        current: dataDone,
-        max: Math.min(DataChunks.length, config.dataCount),
-      },
-      eventChunks: {
-        current: eventDone,
-        max: Math.min(Events.length, config.eventCount),
-      },
-      checkpointChunks: {
-        current: checkpointDone,
-        max: Math.min(Checkpoints.length, config.checkpointCount),
-      },
+      header: { current: headerDone, max: 1 },
+      dataChunks: { current: dataDone, max: Math.min(streamFiles.length, config.dataCount) },
+      eventChunks: { current: eventDone, max: Math.min(eventsArray.length, config.eventCount) },
+      checkpointChunks: { current: checkpointDone, max: Math.min(eventsArray.length, config.checkpointCount) },
     });
   });
 
-  return buildReplay([
-    {
-      type: 'meta',
-      size: metaBuffer.length,
-      data: metaBuffer,
-    },
-    ...result,
+  console.log('All chunks processed. Building replay...');
+  const replay = buildReplay([
+    { type: 'meta', size: metaBuffer.length, data: metaBuffer },
+    ...downloadChunks,
   ]);
+
+  console.log('Replay built successfully.');
+  return replay;
 };
 
-module.exports = { downloadReplay, downloadMetadata: downloadMetadataWrapper };
+(async () => {
+  try {
+    const result = await processReplay();
+    console.log('Replay processing completed successfully:', result);
+
+    const outputFilePath = path.join(__dirname, 'processed_replay.replay');
+    fs.writeFileSync(outputFilePath, result);
+    console.log(`Replay saved successfully to: ${outputFilePath}`);
+  } catch (error) {
+    console.error('Error during replay processing:', error);
+  }
+})();

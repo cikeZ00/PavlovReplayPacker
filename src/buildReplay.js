@@ -26,10 +26,12 @@ const buildReplay = (parts) => {
         startOffset = newBuffer.offset;
 
         switch (part.chunkType) {
+          // Header
           case 0:
             newBuffer.writeBytes(part.data);
             break;
-
+            
+          // Data
           case 1:
             newBuffer.writeInt32(part.Time1);
             newBuffer.writeInt32(part.Time2);
@@ -38,6 +40,7 @@ const buildReplay = (parts) => {
             newBuffer.writeBytes(part.data);
             break;
 
+          // Checkpoint
           case 2:
           case 3:
             newBuffer.writeString(part.Id);

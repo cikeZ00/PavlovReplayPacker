@@ -4,3 +4,4 @@ node_modules
 headertemp
 metadata.json
 *.replay
+replay_chunks/
