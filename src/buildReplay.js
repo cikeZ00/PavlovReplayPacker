@@ -43,6 +43,8 @@ const buildReplay = (parts) => {
           // Checkpoint
           case 2:
           case 3:
+            console.log(part);
+            console.log(part.data.length);
             newBuffer.writeString(part.Id);
             newBuffer.writeString(part.Group);
             newBuffer.writeString(part.Metadata || '');

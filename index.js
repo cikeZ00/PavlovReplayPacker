@@ -5,6 +5,7 @@ const buildReplay = require('./src/buildReplay');
 
 const replayChunksDir = path.join(__dirname, 'replay_chunks');
 const metadataFilePath = path.join(replayChunksDir, 'metadata.json');
+const timingFilePath = path.join(replayChunksDir, 'timing.json');
 
 const defaultConfig = {
   updateCallback: (progress) => console.log('Progress:', progress),
@@ -22,6 +23,15 @@ const loadMetadata = () => {
   return metadata;
 };
 
+const loadTimingData = () => {
+  console.log(`Loading timing data from: ${timingFilePath}`);
+  if (!fs.existsSync(timingFilePath)) {
+    throw new Error(`Timing file not found at ${timingFilePath}`);
+  }
+  const timingData = JSON.parse(fs.readFileSync(timingFilePath, 'utf-8'));
+  return timingData;
+};
+
 const loadChunkFile = (chunkName) => {
   const filePath = path.join(replayChunksDir, chunkName);
   console.log(`Loading chunk file: ${filePath}`);
@@ -37,6 +47,7 @@ const processReplay = async (config = defaultConfig) => {
   console.log('Starting replay processing with config:', config);
 
   const metadata = loadMetadata();
+  const timingData = loadTimingData();
   if (!metadata || !metadata.meta) {
     throw new Error('Metadata is invalid or missing the "meta" field.');
   }
@@ -87,11 +98,18 @@ const processReplay = async (config = defaultConfig) => {
     console.log(`Loading data chunk: ${file}`);
     const filePath = path.join(replayChunksDir, file);
     const fileSize = fs.statSync(filePath).size;
+
+    const chunkNumber = index + 1; // Stream files are 1-indexed in timing.json
+    const timingEntry = timingData.find(entry => parseInt(entry.numchunks, 10) === chunkNumber);
+
     downloadChunks.push({
       data: loadChunkFile(file),
       type: 'chunk',
       chunkType: 1, // data chunk
       size: fileSize,
+      Time1: timingEntry ? parseInt(timingEntry.mtime1, 10) : 0,
+      Time2: timingEntry ? parseInt(timingEntry.mtime2, 10) : 0,
+      SizeInBytes: fileSize,
       encoding: null,
     });
   });
