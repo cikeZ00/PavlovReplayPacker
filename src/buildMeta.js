@@ -1,7 +1,7 @@
 const Replay = require('./Replay');
 const Size = require('./Size');
 
-const FRIENDLY_NAME_SIZE = 524-10; // Reserved space for friendly name in bytes
+const FRIENDLY_NAME_SIZE = 514; // Reserved space for friendly name in bytes
 
 const buildMeta = (meta) => {
   const size = new Size();
