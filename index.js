@@ -56,6 +56,12 @@ const processReplay = async (config = defaultConfig) => {
 
   const downloadChunks = [];
 
+  // Merge events_pavlov into events for event processing
+  const eventsArray = [
+    ...(metadata.events?.events || []),
+    ...(metadata.events_pavlov?.events || []),
+  ];
+
   // Build meta buffer
   const metaBuffer = buildMeta(meta);
   console.log('Meta buffer created successfully.');
@@ -80,16 +86,12 @@ const processReplay = async (config = defaultConfig) => {
       return aNum - bNum;
     });
 
-  const eventsArray = (metadata.events && Array.isArray(metadata.events.events))
-    ? metadata.events.events
-    : [];
-
   // Set progress max
   updateCallback({
     header: { current: 0, max: 1 },
     dataChunks: { current: 0, max: Math.min(streamFiles.length, config.dataCount) },
     eventChunks: { current: 0, max: Math.min(eventsArray.length, config.eventCount) },
-    checkpointChunks: { current: 0, max: Math.min(eventsArray.length, config.checkpointCount) },
+    checkpointChunks: { current: 0, max: Math.min(metadata.events?.events.length || 0, config.checkpointCount) },
   });
 
   // Load streams
@@ -114,17 +116,19 @@ const processReplay = async (config = defaultConfig) => {
     });
   });
 
-  // Process events from the metadata as event chunks.
+  // Process events from the merged events array as event chunks
   eventsArray.forEach((event, index) => {
     if (index >= config.eventCount) return;
     console.log(`Processing event chunk for event: ${event.id}`);
 
-    // Convert event.data to a Buffer
     let eventBuffer;
     if (event.data && event.data.type === 'Buffer' && Array.isArray(event.data.data)) {
       eventBuffer = Buffer.from(event.data.data);
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // TODO: Double check if computedSize is correct
+    // ------------------------------------------------------------------------------------------------
     const computedSize =
       35 +
       (event.id ? event.id.length : 0) +
@@ -138,25 +142,27 @@ const processReplay = async (config = defaultConfig) => {
       chunkType: 3, // event chunk type
       size: computedSize,
       encoding: null,
-      Id: event.id,         
-      Group: event.group,   
+      Id: event.id,
+      Group: event.group,
       Metadata: event.meta,
-      Time1: event.time1 || 0, 
+      Time1: event.time1 || 0,
       Time2: event.time2 || 0,
     });
   });
 
-  // Process the same events as checkpoint chunks
-  eventsArray.forEach((event, index) => {
+  // Process only metadata.events as checkpoint chunks
+  (metadata.events?.events || []).forEach((event, index) => {
     if (index >= config.checkpointCount) return;
     console.log(`Processing checkpoint chunk for event: ${event.id}`);
 
-    // Convert event.data to a Buffer
     let checkpointBuffer;
     if (event.data && event.data.type === 'Buffer' && Array.isArray(event.data.data)) {
       checkpointBuffer = Buffer.from(event.data.data);
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // TODO: Double check if computedSize is correct
+    // ------------------------------------------------------------------------------------------------
     const computedSize =
       35 +
       (event.id ? event.id.length : 0) +
@@ -166,15 +172,15 @@ const processReplay = async (config = defaultConfig) => {
 
     downloadChunks.push({
       data: checkpointBuffer,
-      type: 'chunk', 
-      chunkType: 2, 
+      type: 'chunk',
+      chunkType: 2, // checkpoint chunk type
       size: computedSize,
       encoding: null,
-      Id: event.id,         
-      Group: event.group,   
-      Metadata: event.meta, 
-      Time1: event.time1 || 0, 
-      Time2: event.time2 || 0, 
+      Id: event.id,
+      Group: event.group,
+      Metadata: event.meta,
+      Time1: event.time1 || 0,
+      Time2: event.time2 || 0,
     });
   });
 
@@ -206,7 +212,7 @@ const processReplay = async (config = defaultConfig) => {
       header: { current: headerDone, max: 1 },
       dataChunks: { current: dataDone, max: Math.min(streamFiles.length, config.dataCount) },
       eventChunks: { current: eventDone, max: Math.min(eventsArray.length, config.eventCount) },
-      checkpointChunks: { current: checkpointDone, max: Math.min(eventsArray.length, config.checkpointCount) },
+      checkpointChunks: { current: checkpointDone, max: Math.min(metadata.events?.events.length || 0, config.checkpointCount) },
     });
   });
 
