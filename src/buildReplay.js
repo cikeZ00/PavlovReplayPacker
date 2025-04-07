@@ -1,72 +1,72 @@
-const Replay = require('./Replay');
-const Size = require('./Size');
-
+// Helper: Serialize a string as [int32 length][utf8 bytes]
+const writeStringBuffer = (str) => {
+  const strBuf = Buffer.from(str, 'utf8');
+  const lenBuf = Buffer.alloc(4);
+  lenBuf.writeInt32LE(strBuf.length, 0);
+  return Buffer.concat([lenBuf, strBuf]);
+};
+ 
 const buildReplay = (parts) => {
-  const size = new Size();
-
-  parts.forEach((chunk) => {
-    size.size += chunk.size;
-  });
-
-  const newBuffer = new Replay(size.getBuffer());
-
+  const buffers = [];
+ 
   parts.forEach((part) => {
-    let chunkTypeOffset = 0;
-    let startOffset = 0;
-
-    switch (part.type) {
-      case 'meta':
-        newBuffer.writeBytes(part.data);
-        break;
-
-      case 'chunk':
-        newBuffer.writeInt32(part.chunkType);
-        chunkTypeOffset = newBuffer.offset;
-        newBuffer.skip(4);
-        startOffset = newBuffer.offset;
-
-        switch (part.chunkType) {
-          // Header
-          case 0:
-            newBuffer.writeBytes(part.data);
-            break;
-            
-          // Data
-          case 1:
-            newBuffer.writeInt32(part.Time1);
-            newBuffer.writeInt32(part.Time2);
-            newBuffer.writeInt32(part.data.length);
-            newBuffer.writeInt32(part.SizeInBytes);
-            newBuffer.writeBytes(part.data);
-            break;
-
-          // Checkpoint
-          case 2:
-          case 3:
-            console.log(part);
-            console.log(part.data.length);
-            newBuffer.writeString(part.Id);
-            newBuffer.writeString(part.Group);
-            newBuffer.writeString(part.Metadata || '');
-            newBuffer.writeInt32(part.Time1);
-            newBuffer.writeInt32(part.Time2);
-            newBuffer.writeInt32(part.data.length);
-            newBuffer.writeBytes(part.data);
-            break;
-
-          default:
-            break;
+    if (part.type === 'meta') {
+      // Meta parts are assumed to be already serialized.
+      buffers.push(part.data);
+    } else if (part.type === 'chunk') {
+      let bodyBuffer;
+ 
+      switch (part.chunkType) {
+        // Chunk type 0: Header. Write the raw data.
+        case 0:
+          bodyBuffer = part.data;
+          break;
+ 
+        // Chunk type 1: Data chunk.
+        case 1: {
+          const headerBuf = Buffer.alloc(16);
+          headerBuf.writeInt32LE(part.Time1, 0);
+          headerBuf.writeInt32LE(part.Time2, 4);
+          headerBuf.writeInt32LE(part.data.length, 8);
+          if (part.SizeInBytes == null) {
+            part.SizeInBytes = part.data.length;
+          }
+          headerBuf.writeInt32LE(part.SizeInBytes, 12);
+          bodyBuffer = Buffer.concat([headerBuf, part.data]);
+          break;
         }
+ 
+        // Chunk types 2 and 3: Checkpoint / Event chunks.
+        case 2:
+        case 3: {
+          const idBuf = writeStringBuffer(part.Id);
+          const groupBuf = writeStringBuffer(part.Group);
+          const metaBuf = writeStringBuffer(part.Metadata || '');
 
-        newBuffer.writeInt32(newBuffer.offset - startOffset, chunkTypeOffset);
-        break;
-
-      default:
-        break;
+          const intBuf = Buffer.alloc(12);
+          intBuf.writeInt32LE(part.Time1, 0);
+          intBuf.writeInt32LE(part.Time2, 4);
+          intBuf.writeInt32LE(part.data.length, 8);
+ 
+          bodyBuffer = Buffer.concat([idBuf, groupBuf, metaBuf, intBuf, part.data]);
+          break;
+        }
+ 
+        default:
+          console.error(`Unknown chunk type encountered: ${part.chunkType}`);
+          return;
+      }
+ 
+      const headerBuffer = Buffer.alloc(8);
+      headerBuffer.writeInt32LE(part.chunkType, 0);
+      headerBuffer.writeInt32LE(bodyBuffer.length, 4);
+ 
+      buffers.push(headerBuffer);
+      buffers.push(bodyBuffer);
     }
   });
-
-  return newBuffer.buffer;
+ 
+  return Buffer.concat(buffers);
 };
-
+ 
 module.exports = buildReplay;

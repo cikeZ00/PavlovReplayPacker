@@ -8,7 +8,6 @@ const buildMeta = (meta) => {
 
   // Fixed fields size (before friendly name)
   size.size += 48;
-  console.log(`Initial fixed fields size: 48`);
 
   // Construct friendly name string using the specified fields
   // Format: gameMode,friendlyName,competitive,0,workshop_mods,live
