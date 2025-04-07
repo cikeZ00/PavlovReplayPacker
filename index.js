@@ -68,6 +68,7 @@ const processReplay = async (config = defaultConfig) => {
     checkpointChunks: { current: 0, max: Math.min(checkpointEvents.length, config.checkpointCount) },
   });
 
+  // For logging only.
   let currentOffset = 0;
 
   console.log(`\n**Dumping Chunks Before Writing File**`);
@@ -83,15 +84,22 @@ const processReplay = async (config = defaultConfig) => {
       return;
     }
 
+    const chunkNumber = index + 1;
+    const timingEntry = timingData.find(entry => parseInt(entry.numchunks, 10) === chunkNumber);
+    const time1 = timingEntry ? parseInt(timingEntry.mtime1, 10) : 0;
+    const time2 = timingEntry ? parseInt(timingEntry.mtime2, 10) : 0;
+
     console.log(`-| Data Chunk ${index}: Offset ${currentOffset}, Size ${fileSize}`);
+
     downloadChunks.push({
       data: fileData,
       type: 'chunk',
       chunkType: 1,
-      Time1: 0, // or use timing if available
-      Time2: 0, // or use timing if available
+      Time1: time1,
+      Time2: time2,
       encoding: null,
     });
+
     currentOffset += fileSize;
   });
 
