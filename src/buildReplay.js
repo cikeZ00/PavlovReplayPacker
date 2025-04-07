@@ -1,6 +1,6 @@
 // Helper: Serialize a string as [int32 length][utf8 bytes]
 const writeStringBuffer = (str) => {
-  const strBuf = Buffer.from(str, 'utf8');
+  const strBuf = Buffer.from(str + '\0', 'utf8');
   const lenBuf = Buffer.alloc(4);
   lenBuf.writeInt32LE(strBuf.length, 0);
   return Buffer.concat([lenBuf, strBuf]);
